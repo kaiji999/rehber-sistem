@@ -1,159 +1,145 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'dart:async';
-import 'dart:io';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:path_provider/path_provider.dart';
 
 class TalkPage extends StatefulWidget {
-  const TalkPage({super.key});
+  const TalkPage({Key? key}) : super(key: key);
 
   @override
   _TalkPageState createState() => _TalkPageState();
 }
 
 class _TalkPageState extends State<TalkPage> {
-  CameraController? _cameraController;
-  Timer? _frameTimer;
-  bool _isSending = false;
-  String _detectedEmotion = "Detecting...";
+  late CameraController _cameraController;
+  late FaceDetector _faceDetector;
+  bool isDetecting = false;
+  String detectedExpression = "Yüz tespit edilemedi";
 
   @override
   void initState() {
     super.initState();
     _initializeCamera();
+    _initializeFaceDetector();
   }
 
   Future<void> _initializeCamera() async {
-    try {
-      final cameras = await availableCameras();
-      final backCamera = cameras.firstWhere(
-        (camera) => camera.lensDirection == CameraLensDirection.back,
-      );
+    final cameras = await availableCameras();
+    final camera = cameras.first;
 
-      _cameraController = CameraController(
-        backCamera,
-        ResolutionPreset.low,
-        enableAudio: false,
-      );
+    _cameraController = CameraController(camera, ResolutionPreset.max);
 
-      await _cameraController!.initialize();
-      if (!mounted) return;
-
-      setState(() {});
-      _startFrameCapture();
-    } catch (e) {
-      print("Error initializing camera: $e");
-    }
+    await _cameraController.initialize();
+    _startImageStream();
   }
 
-  void _startFrameCapture() {
-    _frameTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!_isSending) {
-        _captureAndSendFrame();
-      }
+  void _initializeFaceDetector() {
+    final options = FaceDetectorOptions(
+      enableClassification: true,
+      enableLandmarks: true,
+      enableContours: false,
+      minFaceSize: 0.1,
+    );
+    _faceDetector = FaceDetector(options: options);
+  }
+
+  void _startImageStream() {
+    _cameraController.startImageStream((CameraImage image) async {
+      if (isDetecting) return;
+
+      isDetecting = true;
+      await _processImage(image);
+      isDetecting = false;
     });
   }
 
-  Future<void> _captureAndSendFrame() async {
-    if (_cameraController == null || !_cameraController!.value.isInitialized) {
-      return;
-    }
-
+  Future<void> _processImage(CameraImage cameraImage) async {
     try {
-      _isSending = true;
-      final XFile frame = await _cameraController!.takePicture();
-      await _sendFrameToBackend(File(frame.path));
-    } catch (e) {
-      print("Error capturing frame: $e");
-    } finally {
-      _isSending = false;
+      final Directory tempDir = await getTemporaryDirectory();
+      final String filePath =
+          "${tempDir.path}/${DateTime.now().millisecondsSinceEpoch}.jpg";
+      final File imageFile = File(filePath);
+
+      final XFile picture = await _cameraController.takePicture();
+      await picture.saveTo(imageFile.path);
+
+      final inputImage = InputImage.fromFile(imageFile);
+      final List<Face> faces = await _faceDetector.processImage(inputImage);
+
+      String expression = faces.isNotEmpty
+          ? _analyzeFacialExpressions(faces.first)
+          : "Yüz tespit edilemedi";
+
+      setState(() {
+        detectedExpression = expression;
+      });
+    } catch (error) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Görüntü işleme hatası"),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
-  Future<void> _sendFrameToBackend(File frame) async {
-    try {
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse('http://192.168.1.108:8000/analyze-gesture/'),
-      );
-      request.files.add(await http.MultipartFile.fromPath('file', frame.path));
-      final response = await request.send();
-
-      if (response.statusCode == 200) {
-        final responseData = await response.stream.bytesToString();
-        print("Backend response: $responseData"); // Debug log
-        final decodedData = json.decode(responseData);
-
-        // Handle both single and multiple emotions
-        if (decodedData.containsKey("emotions")) {
-          setState(() {
-            _detectedEmotion = (decodedData["emotions"] as List).join(", ");
-          });
-        } else if (decodedData.containsKey("emotion")) {
-          setState(() {
-            _detectedEmotion = decodedData["emotion"] ?? "Unknown";
-          });
-        } else {
-          setState(() {
-            _detectedEmotion = "Unknown";
-          });
-        }
+  String _analyzeFacialExpressions(Face face) {
+    if (face.smilingProbability != null && face.smilingProbability! > 0.7) {
+      return "Mutlu";
+    } else if (face.smilingProbability != null && face.smilingProbability! < 0.3) {
+      if (face.leftEyeOpenProbability != null &&
+          face.leftEyeOpenProbability! < 0.3 &&
+          face.rightEyeOpenProbability != null &&
+          face.rightEyeOpenProbability! < 0.3) {
+        return "Üzgün";
+      } else if (face.leftEyeOpenProbability != null &&
+          face.leftEyeOpenProbability! > 0.7 &&
+          face.rightEyeOpenProbability != null &&
+          face.rightEyeOpenProbability! > 0.7) {
+        return "Şaşırmış";
       } else {
-        print("Failed to send frame: ${response.statusCode}");
-        setState(() {
-          _detectedEmotion = "Error: ${response.statusCode}";
-        });
+        return "Korkmuş";
       }
-    } catch (e) {
-      print("Error sending frame to backend: $e");
-      setState(() {
-        _detectedEmotion = "Error";
-      });
+    } else {
+      return "Tepkisiz";
     }
   }
 
   @override
   void dispose() {
-    _frameTimer?.cancel();
-    _cameraController?.dispose();
+    _cameraController.dispose();
+    _faceDetector.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color.fromARGB(255, 0, 106, 244),
       body: GestureDetector(
         onDoubleTap: () {
-          Navigator.pop(context);
+          Navigator.pop(context); // Navigate back to the homepage
         },
-        child: Stack(
-          children: [
-            Center(
-              child:
-                  _cameraController == null ||
-                          !_cameraController!.value.isInitialized
-                      ? const CircularProgressIndicator()
-                      : CameraPreview(_cameraController!),
-            ),
-            Positioned(
-              bottom: 50,
-              left: 20,
-              right: 20,
-              child: Text(
-                "Detected Emotion: $_detectedEmotion",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ],
-        ),
+        child: _cameraController.value.isInitialized
+            ? Stack(
+                children: [
+                  CameraPreview(_cameraController),
+                  Positioned(
+                    bottom: 20,
+                    left: 20,
+                    child: Text(
+                      detectedExpression,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        backgroundColor: Colors.black54,
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : const Center(child: CircularProgressIndicator()),
       ),
-    );
+    );      
   }
 }

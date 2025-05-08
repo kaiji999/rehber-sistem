@@ -28,7 +28,7 @@ class _WalkPageState extends State<WalkPage> {
     final cameras = await availableCameras();
     final camera = cameras.first;
 
-    _cameraController = CameraController(camera, ResolutionPreset.medium);
+    _cameraController = CameraController(camera, ResolutionPreset.max);
 
     await _cameraController.initialize();
     _startImageStream();
@@ -51,32 +51,27 @@ class _WalkPageState extends State<WalkPage> {
 
   Future<void> _processImage(CameraImage cameraImage) async {
     try {
-      // Save the camera image to a temporary file
       final Directory tempDir = await getTemporaryDirectory();
       final String filePath =
           "${tempDir.path}/${DateTime.now().millisecondsSinceEpoch}.jpg";
       final File imageFile = File(filePath);
 
-      // Convert CameraImage to file
       final XFile picture = await _cameraController.takePicture();
       await picture.saveTo(imageFile.path);
 
-      // Process the image using ML Kit
       final inputImage = InputImage.fromFile(imageFile);
       final List<ImageLabel> labels = await _imageLabeler.processImage(
         inputImage,
       );
 
-      // Format the detected objects
-      String detectedObjects =
-          labels.isNotEmpty
-              ? labels
-                  .map(
-                    (label) =>
-                        "${label.label} - ${(label.confidence * 100).toStringAsFixed(2)}%",
-                  )
-                  .join("\n")
-              : "No Object Detected";
+      String detectedObjects = labels.isNotEmpty
+          ? labels
+              .map(
+                (label) =>
+                    "${label.label} - ${(label.confidence * 100).toStringAsFixed(2)}%",
+              )
+              .join("\n")
+          : "No Object Detected";
 
       setState(() {
         result = detectedObjects;
@@ -101,10 +96,12 @@ class _WalkPageState extends State<WalkPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Walk Mode - Object Detection')),
-      body:
-          _cameraController.value.isInitialized
-              ? Stack(
+      body: GestureDetector(
+        onDoubleTap: () {
+          Navigator.pop(context); // Navigate back to the homepage
+        },
+        child: _cameraController.value.isInitialized
+            ? Stack(
                 children: [
                   CameraPreview(_cameraController),
                   Positioned(
@@ -121,7 +118,8 @@ class _WalkPageState extends State<WalkPage> {
                   ),
                 ],
               )
-              : const Center(child: CircularProgressIndicator()),
+            : const Center(child: CircularProgressIndicator()),
+      ),
     );
   }
 }

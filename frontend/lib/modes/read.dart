@@ -1,110 +1,117 @@
-import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:http/http.dart' as http;
-import 'dart:convert';
 import 'dart:io';
-import 'package:flutter_tts/flutter_tts.dart';
+import 'package:flutter/material.dart';
+import 'package:camera/camera.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:path_provider/path_provider.dart';
 
 class ReadPage extends StatefulWidget {
-  const ReadPage({super.key});
+  const ReadPage({Key? key}) : super(key: key);
 
   @override
   _ReadPageState createState() => _ReadPageState();
 }
 
 class _ReadPageState extends State<ReadPage> {
-  File? _image;
-  String _extractedText = '';
-  final ImagePicker _picker = ImagePicker();
-  final FlutterTts _flutterTts = FlutterTts();
+  late CameraController _cameraController;
+  late TextRecognizer _textRecognizer;
+  bool isDetecting = false;
+  String extractedText = "No Text Detected";
 
   @override
   void initState() {
     super.initState();
-    _initializeTTS();
-    _informUser();
+    _initializeCamera();
+    _initializeTextRecognizer();
   }
 
-  void _initializeTTS() async {
-    await _flutterTts.setLanguage("tr-TR");
-    await _flutterTts.awaitSpeakCompletion(true);
+  Future<void> _initializeCamera() async {
+    final cameras = await availableCameras();
+    final camera = cameras.first;
+
+    _cameraController = CameraController(camera, ResolutionPreset.max);
+
+    await _cameraController.initialize();
+    _startImageStream();
   }
 
-  void _informUser() async {
-    await _flutterTts.speak("Kamera açmak için uzun basın.");
+  void _initializeTextRecognizer() {
+    _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+  }
+
+  void _startImageStream() {
+    _cameraController.startImageStream((CameraImage image) async {
+      if (isDetecting) return;
+
+      isDetecting = true;
+      await _processImage(image);
+      isDetecting = false;
+    });
+  }
+
+  Future<void> _processImage(CameraImage cameraImage) async {
+    try {
+      final Directory tempDir = await getTemporaryDirectory();
+      final String filePath =
+          "${tempDir.path}/${DateTime.now().millisecondsSinceEpoch}.jpg";
+      final File imageFile = File(filePath);
+
+      final XFile picture = await _cameraController.takePicture();
+      await picture.saveTo(imageFile.path);
+
+      final inputImage = InputImage.fromFile(imageFile);
+      final RecognizedText recognizedText =
+          await _textRecognizer.processImage(inputImage);
+
+      String detectedText = recognizedText.text.isNotEmpty
+          ? recognizedText.text
+          : "No Text Detected";
+
+      setState(() {
+        extractedText = detectedText;
+      });
+    } catch (error) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("Error Processing Image"),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   @override
   void dispose() {
-    _flutterTts.stop();
+    _cameraController.dispose();
+    _textRecognizer.close();
     super.dispose();
-  }
-
-  Future<void> _pickImage() async {
-    final pickedFile = await _picker.pickImage(source: ImageSource.camera);
-    if (pickedFile != null) {
-      setState(() {
-        _image = File(pickedFile.path);
-      });
-      await _flutterTts.speak("Görsel yakalandı. Metin çıkarılıyor.");
-      _extractText();
-    }
-  }
-
-  Future<void> _extractText() async {
-    if (_image == null) return;
-
-    final request = http.MultipartRequest(
-      'POST',
-      Uri.parse('http://192.168.1.108:8000/extract-text/'),
-    );
-    request.files.add(await http.MultipartFile.fromPath('file', _image!.path));
-    final response = await request.send();
-
-    if (response.statusCode == 200) {
-      final responseData = await response.stream.bytesToString();
-      final data = json.decode(responseData);
-      setState(() {
-        _extractedText = data['text'];
-      });
-      await _flutterTts.speak("Metin çıkarıldı. Metin okunuyor.");
-      _speakText();
-    } else {
-      setState(() {
-        _extractedText = 'Metin çıkarma hatası';
-      });
-      await _flutterTts.speak("Metin çıkarma hatası.");
-    }
-  }
-
-  Future<void> _speakText() async {
-    await _flutterTts.speak(_extractedText);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color.fromARGB(255, 28, 101, 8),
       body: GestureDetector(
-        onDoubleTap: () async {
-          await _flutterTts.speak("Ana sayfaya dönülüyor.");
-          Navigator.pop(context);
+        onDoubleTap: () {
+          Navigator.pop(context); // Navigate back to the homepage
         },
-        onLongPress: () async {
-          await _flutterTts.speak("Kamera açılıyor.");
-          _pickImage();
-        },
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              _image == null ? Text('Görsel seçilmedi.') : Image.file(_image!),
-              SizedBox(height: 20),
-              Text(_extractedText),
-              SizedBox(height: 20),
-            ],
-          ),
-        ),
+        child: _cameraController.value.isInitialized
+            ? Stack(
+                children: [
+                  CameraPreview(_cameraController),
+                  Positioned(
+                    bottom: 20,
+                    left: 20,
+                    child: Text(
+                      extractedText,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        backgroundColor: Colors.black54,
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : const Center(child: CircularProgressIndicator()),
       ),
     );
   }

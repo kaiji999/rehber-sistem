@@ -9,6 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  google_mlkit_text_recognition: ^0.15.0
   flutter_tts: ^4.2.2
   geocoding: ^3.0.0
   google_maps_flutter: ^2.10.1
@@ -16,12 +17,14 @@ dependencies:
   image_picker: ^1.1.2
   location: ^8.0.0
   camera: ^0.11.1
-  image: ^3.0.1
+  image: ^4.5.4
   flutter_compass: ^0.8.1
   tflite_flutter: ^0.11.0
   google_mlkit_image_labeling: ^0.14.1
   path_provider: ^2.1.5
   path: ^1.9.1
+  google_mlkit_commons: ^0.11.0
+  google_mlkit_face_detection: ^0.13.1
   
 dev_dependencies:
   flutter_test:
