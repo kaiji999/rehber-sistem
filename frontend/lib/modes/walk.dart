@@ -15,13 +15,32 @@ class _WalkPageState extends State<WalkPage> {
   late CameraController _cameraController;
   late ImageLabeler _imageLabeler;
   bool isDetecting = false;
-  String result = "No Object Detected";
+  String result = "Hiçbir nesne tespit edilmedi";
+  Map<String, String> labelTranslations = {}; // <-- Eklendi
 
   @override
   void initState() {
     super.initState();
+    _loadLabelTranslations(); // <-- Eklendi
     _initializeCamera();
     _initializeImageLabeler();
+  }
+
+  Future<void> _loadLabelTranslations() async {
+    final labelsFile = await DefaultAssetBundle.of(context)
+        .loadString('lib/assets/labels_tr.txt');
+    final lines = labelsFile.split('\n');
+    final Map<String, String> translations = {};
+    for (var line in lines) {
+      if (line.trim().isEmpty || !line.contains('=')) continue;
+      final parts = line.split('=');
+      if (parts.length == 2) {
+        translations[parts[0].trim().toLowerCase()] = parts[1].trim();
+      }
+    }
+    setState(() {
+      labelTranslations = translations;
+    });
   }
 
   Future<void> _initializeCamera() async {
@@ -63,15 +82,22 @@ class _WalkPageState extends State<WalkPage> {
       final List<ImageLabel> labels = await _imageLabeler.processImage(
         inputImage,
       );
+      double threshold = 0.8; // Eşik değeri burada ayarlanır
 
-      String detectedObjects = labels.isNotEmpty
-          ? labels
+      // Eşik değerinin altındakileri filtrele
+      final filteredLabels = labels.where((label) => label.confidence >= threshold).toList();
+      String detectedObjects = filteredLabels.isNotEmpty
+          ? filteredLabels
+              .where((label) => labelTranslations.containsKey(label.label.toLowerCase()))
               .map(
-                (label) =>
-                    "${label.label} - ${(label.confidence * 100).toStringAsFixed(2)}%",
+                (label) {
+                  final key = label.label.toLowerCase();
+                  final tr = labelTranslations[key];
+                  return "${tr!} - ${(label.confidence * 100).toStringAsFixed(2)}%";
+                },
               )
               .join("\n")
-          : "No Object Detected";
+          : "Hiçbir nesne tespit edilmedi";
 
       setState(() {
         result = detectedObjects;
