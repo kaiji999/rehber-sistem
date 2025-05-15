@@ -22,6 +22,7 @@ dependencies:
   google_mlkit_image_labeling: ^0.14.1
   path_provider: ^2.1.5
   path: ^1.9.1
+
   
 dev_dependencies:
   flutter_test:
@@ -32,3 +33,5 @@ flutter:
   uses-material-design: true
   assets:
     - lib/assets/logo.png
+    - lib/assets/labelmap.txt
+    - lib/assets/detect.tflite

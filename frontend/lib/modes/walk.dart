@@ -1,8 +1,9 @@
-import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
-import 'package:path_provider/path_provider.dart';
+import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:image/image.dart' as img;
+import 'package:flutter/services.dart';
 
 class WalkPage extends StatefulWidget {
   const WalkPage({Key? key}) : super(key: key);
@@ -13,15 +14,22 @@ class WalkPage extends StatefulWidget {
 
 class _WalkPageState extends State<WalkPage> {
   late CameraController _cameraController;
-  late ImageLabeler _imageLabeler;
+  late Interpreter _interpreter;
+  List<String> _labels = [];
   bool isDetecting = false;
   String result = "No Object Detected";
 
   @override
   void initState() {
     super.initState();
+    _initializeModel();
     _initializeCamera();
-    _initializeImageLabeler();
+  }
+
+  Future<void> _initializeModel() async {
+    _interpreter = await Interpreter.fromAsset('detect.tflite');
+    final labelData = await rootBundle.loadString('assets/labelmap.txt');
+    _labels = labelData.split('\n');
   }
 
   Future<void> _initializeCamera() async {
@@ -29,72 +37,109 @@ class _WalkPageState extends State<WalkPage> {
     final camera = cameras.first;
 
     _cameraController = CameraController(camera, ResolutionPreset.medium);
-
     await _cameraController.initialize();
-    _startImageStream();
-  }
 
-  void _initializeImageLabeler() {
-    final options = ImageLabelerOptions(confidenceThreshold: 0.5);
-    _imageLabeler = ImageLabeler(options: options);
+    _startImageStream();
+    setState(() {});
   }
 
   void _startImageStream() {
     _cameraController.startImageStream((CameraImage image) async {
-      if (isDetecting) return;
-
-      isDetecting = true;
-      await _processImage(image);
-      isDetecting = false;
+      if (!isDetecting) {
+        isDetecting = true;
+        await _runInference(image);
+        isDetecting = false;
+      }
     });
   }
 
-  Future<void> _processImage(CameraImage cameraImage) async {
+  Future<void> _runInference(CameraImage cameraImage) async {
     try {
-      // Save the camera image to a temporary file
-      final Directory tempDir = await getTemporaryDirectory();
-      final String filePath =
-          "${tempDir.path}/${DateTime.now().millisecondsSinceEpoch}.jpg";
-      final File imageFile = File(filePath);
-
-      // Convert CameraImage to file
-      final XFile picture = await _cameraController.takePicture();
-      await picture.saveTo(imageFile.path);
-
-      // Process the image using ML Kit
-      final inputImage = InputImage.fromFile(imageFile);
-      final List<ImageLabel> labels = await _imageLabeler.processImage(
-        inputImage,
+      final img.Image rgbImage = _convertYUV420ToImage(cameraImage);
+      final img.Image resized = img.copyResize(
+        rgbImage,
+        width: 300,
+        height: 300,
       );
 
-      // Format the detected objects
-      String detectedObjects =
-          labels.isNotEmpty
-              ? labels
-                  .map(
-                    (label) =>
-                        "${label.label} - ${(label.confidence * 100).toStringAsFixed(2)}%",
-                  )
-                  .join("\n")
-              : "No Object Detected";
+      Uint8List input = _imageToByteList(resized, 300);
+
+      var outputBoxes = List.generate(1, (_) => List.filled(10 * 4, 0.0));
+      var outputClasses = List.generate(1, (_) => List.filled(10, 0.0));
+      var outputScores = List.generate(1, (_) => List.filled(10, 0.0));
+      var numDetections = List.filled(1, 0.0);
+
+      _interpreter.runForMultipleInputs(
+        [input],
+        {0: outputBoxes, 1: outputClasses, 2: outputScores, 3: numDetections},
+      );
+
+      String detectedText = "";
+      for (int i = 0; i < numDetections[0].toInt(); i++) {
+        double score = outputScores[0][i];
+        int classIndex = outputClasses[0][i].toInt();
+        if (score > 0.5 && classIndex < _labels.length) {
+          detectedText +=
+              "${_labels[classIndex]} - ${(score * 100).toStringAsFixed(2)}%\n";
+        }
+      }
 
       setState(() {
-        result = detectedObjects;
+        result = detectedText.isNotEmpty ? detectedText : "No Object Detected";
       });
-    } catch (error) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Error Processing Image"),
-          backgroundColor: Colors.red,
-        ),
-      );
+    } catch (e) {
+      print("Error during inference: $e");
     }
+  }
+
+  Uint8List _imageToByteList(img.Image image, int size) {
+    final bytes = Uint8List(size * size * 3);
+    int pixelIndex = 0;
+    for (int y = 0; y < size; y++) {
+      for (int x = 0; x < size; x++) {
+        final pixel = image.getPixel(x, y);
+        bytes[pixelIndex++] = img.getRed(pixel);
+        bytes[pixelIndex++] = img.getGreen(pixel);
+        bytes[pixelIndex++] = img.getBlue(pixel);
+      }
+    }
+    return bytes;
+  }
+
+  img.Image _convertYUV420ToImage(CameraImage image) {
+    final width = image.width;
+    final height = image.height;
+    final uvRowStride = image.planes[1].bytesPerRow;
+    final uvPixelStride = image.planes[1].bytesPerPixel!;
+
+    final img.Image imgBuffer = img.Image(width, height);
+
+    for (int y = 0; y < height; y++) {
+      final uvRow = uvRowStride * (y >> 1);
+      for (int x = 0; x < width; x++) {
+        final uvPixel = uvRow + (x >> 1) * uvPixelStride;
+
+        final yVal = image.planes[0].bytes[y * width + x];
+        final uVal = image.planes[1].bytes[uvPixel];
+        final vVal = image.planes[2].bytes[uvPixel];
+
+        final r = (yVal + 1.370705 * (vVal - 128)).toInt().clamp(0, 255);
+        final g = (yVal - 0.337633 * (uVal - 128) - 0.698001 * (vVal - 128))
+            .toInt()
+            .clamp(0, 255);
+        final b = (yVal + 1.732446 * (uVal - 128)).toInt().clamp(0, 255);
+
+        imgBuffer.setPixel(x, y, img.getColor(r, g, b));
+      }
+    }
+
+    return imgBuffer;
   }
 
   @override
   void dispose() {
     _cameraController.dispose();
-    _imageLabeler.close();
+    _interpreter.close();
     super.dispose();
   }
 
@@ -110,12 +155,16 @@ class _WalkPageState extends State<WalkPage> {
                   Positioned(
                     bottom: 20,
                     left: 20,
-                    child: Text(
-                      result,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        backgroundColor: Colors.black54,
+                    right: 20,
+                    child: Container(
+                      padding: const EdgeInsets.all(10),
+                      color: Colors.black54,
+                      child: Text(
+                        result,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                        ),
                       ),
                     ),
                   ),
