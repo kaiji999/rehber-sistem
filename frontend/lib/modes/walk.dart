@@ -4,6 +4,8 @@ import 'package:camera/camera.dart';
 import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:flutter/services.dart';
+import 'package:path/path.dart';
 
 class WalkPage extends StatefulWidget {
   const WalkPage({Key? key}) : super(key: key);
@@ -14,19 +16,26 @@ class WalkPage extends StatefulWidget {
 
 class _WalkPageState extends State<WalkPage> {
   late CameraController _cameraController;
-  late ImageLabeler _imageLabeler;
+  late ImageLabeler _baseLabeler;
+  late ImageLabeler _customLabeler;
   late FlutterTts _flutterTts;
   bool isDetecting = false;
   bool isSpeaking = false;
   String result = "Hiçbir nesne algılanmadı";
+  List<String> customLabels = [];
   Map<String, String> labelTranslations = {};
+
+  final String _modelPath = 'lib/assets/model/son_model.tflite';
+  final String _labelsPath = 'lib/assets/model/labels.txt';
+  final String _labelsTrPath = 'lib/assets/labels_tr.txt';
 
   @override
   void initState() {
     super.initState();
+    _loadCustomLabels();
     _loadLabelTranslations();
     _initializeCamera();
-    _initializeImageLabeler();
+    _initializeLabelers();
     _flutterTts = FlutterTts();
     _flutterTts.setCompletionHandler(() {
       setState(() {
@@ -35,13 +44,21 @@ class _WalkPageState extends State<WalkPage> {
     });
   }
 
+  Future<void> _loadCustomLabels() async {
+    final labelsFile = await rootBundle.loadString(_labelsPath);
+    setState(() {
+      customLabels =
+          labelsFile
+              .split('\n')
+              .where((line) => line.trim().isNotEmpty)
+              .toList();
+    });
+  }
+
   Future<void> _loadLabelTranslations() async {
-    final labelsFile = await DefaultAssetBundle.of(
-      context,
-    ).loadString('lib/assets/labels_tr.txt');
-    final lines = labelsFile.split('\n');
+    final trFile = await rootBundle.loadString(_labelsTrPath);
     final Map<String, String> translations = {};
-    for (var line in lines) {
+    for (var line in trFile.split('\n')) {
       if (line.trim().isEmpty || !line.contains('=')) continue;
       final parts = line.split('=');
       if (parts.length == 2) {
@@ -56,29 +73,46 @@ class _WalkPageState extends State<WalkPage> {
   Future<void> _initializeCamera() async {
     final cameras = await availableCameras();
     final camera = cameras.first;
-
     _cameraController = CameraController(camera, ResolutionPreset.medium);
-
     await _cameraController.initialize();
     _startImageStream();
   }
 
-  void _initializeImageLabeler() {
-    final options = ImageLabelerOptions(confidenceThreshold: 0.5);
-    _imageLabeler = ImageLabeler(options: options);
+  Future<void> _initializeLabelers() async {
+    _baseLabeler = ImageLabeler(
+      options: ImageLabelerOptions(confidenceThreshold: 0.5),
+    );
+    final modelPath = await _getAssetPath(_modelPath);
+    _customLabeler = ImageLabeler(
+      options: LocalLabelerOptions(
+        modelPath: modelPath,
+        confidenceThreshold: 0.5,
+      ),
+    );
+  }
+
+  Future<String> _getAssetPath(String asset) async {
+    final directory = await getApplicationSupportDirectory();
+    final path = '${directory.path}/${basename(asset)}';
+    final file = File(path);
+    if (!await file.exists()) {
+      final byteData = await rootBundle.load(asset);
+      await file.create(recursive: true);
+      await file.writeAsBytes(byteData.buffer.asUint8List());
+    }
+    return file.path;
   }
 
   void _startImageStream() {
     _cameraController.startImageStream((CameraImage image) async {
       if (isDetecting || isSpeaking) return;
-
       isDetecting = true;
-      await _processImage(image);
+      await _processImage();
       isDetecting = false;
     });
   }
 
-  Future<void> _processImage(CameraImage cameraImage) async {
+  Future<void> _processImage() async {
     try {
       final Directory tempDir = await getTemporaryDirectory();
       final String filePath =
@@ -89,40 +123,91 @@ class _WalkPageState extends State<WalkPage> {
       await picture.saveTo(imageFile.path);
 
       final inputImage = InputImage.fromFile(imageFile);
-      final List<ImageLabel> labels = await _imageLabeler.processImage(
+
+      // Base model: image labeler
+      final List<ImageLabel> baseLabels = await _baseLabeler.processImage(
         inputImage,
       );
-      double threshold = 0.1;
 
-      final filteredLabels =
-          labels.where((label) => label.confidence >= threshold).toList();
-      String detectedObjects =
-          filteredLabels.isNotEmpty
-              ? filteredLabels
-                  .where(
-                    (label) => labelTranslations.containsKey(
-                      label.label.toLowerCase(),
-                    ),
-                  )
-                  .map((label) {
-                    final key = label.label.toLowerCase();
-                    final tr = labelTranslations[key];
-                    return "${tr!} - ${(label.confidence * 100).toStringAsFixed(2)}%";
-                  })
-                  .join("\n")
-              : "Hiçbir nesne tespit edilmedi";
+      // Custom model: image labeler
+      final List<ImageLabel> customLabelsResult = await _customLabeler
+          .processImage(inputImage);
+
+      // Format results
+      String detectedObjects = "";
+
+      // Base model results (with Turkish translation)
+      if (baseLabels.isNotEmpty) {
+        detectedObjects +=
+            "Varsayılan Model:\n" +
+            baseLabels
+                .map((label) {
+                  final key = label.label.toLowerCase();
+                  final tr = labelTranslations[key];
+                  return "${tr ?? label.label} - ${(label.confidence * 100).toStringAsFixed(2)}%";
+                })
+                .join("\n") +
+            "\n";
+      }
+
+      // Custom model results (no translation)
+      if (customLabelsResult.isNotEmpty) {
+        detectedObjects +=
+            "Özel Model:\n" +
+            customLabelsResult
+                .map((label) {
+                  final idx = label.index;
+                  final customLabel =
+                      (idx < customLabels.length)
+                          ? customLabels[idx]
+                          : label.label;
+                  return "$customLabel - ${(label.confidence * 100).toStringAsFixed(2)}%";
+                })
+                .join("\n") +
+            "\n";
+      }
+
+      if (detectedObjects.trim().isEmpty) {
+        detectedObjects = "Hiçbir nesne tespit edilmedi";
+      }
 
       setState(() {
         result = detectedObjects;
       });
 
-      // Speak the detected objects
-      if (detectedObjects != "Hiçbir nesne algılanmadı") {
+      // Speak the detected objects (Turkish for base model)
+      if (detectedObjects != "Hiçbir nesne tespit edilmedi" &&
+          detectedObjects != "Hiçbir nesne algılanmadı") {
         isSpeaking = true;
-        await _flutterTts.speak(result);
+        String speakText = "";
+        if (baseLabels.isNotEmpty) {
+          speakText +=
+              baseLabels
+                  .map((label) {
+                    final key = label.label.toLowerCase();
+                    return labelTranslations[key] ?? label.label;
+                  })
+                  .join(", ") +
+              ". ";
+        }
+        if (customLabelsResult.isNotEmpty) {
+          speakText +=
+              customLabelsResult
+                  .map((label) {
+                    final idx = label.index;
+                    return (idx < customLabels.length)
+                        ? customLabels[idx]
+                        : label.label;
+                  })
+                  .join(", ") +
+              ". ";
+        }
+        await _flutterTts.speak(speakText);
       }
     } catch (error) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      print(error); // Print the error for debugging
+      if (!mounted) return;
+      ScaffoldMessenger.of(context as BuildContext).showSnackBar(
         SnackBar(
           content: Text("Görüntü işleme hatası"),
           backgroundColor: Colors.red,
@@ -134,7 +219,8 @@ class _WalkPageState extends State<WalkPage> {
   @override
   void dispose() {
     _cameraController.dispose();
-    _imageLabeler.close();
+    _baseLabeler.close();
+    _customLabeler.close();
     _flutterTts.stop();
     super.dispose();
   }

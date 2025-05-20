@@ -1,16 +1,42 @@
-0 otomat
-1 kalem
-2 kapı
-3 kitap
-4 asansör
-5 merdiven
-6 muz
-7 elma
-8 portakal
-9 soğan
-10 patates
-11 marul
-12 çikolata
-13 cips
-14 bisküvi
-15 kantin
+otomat
+kalem
+kapı
+kitap
+asansör
+merdiven
+muz
+elma
+portakal
+soğan
+patates
+marul
+çikolata
+cips
+bisküvi
+kantin
+otopark
+insan
+araba
+köpek
+bilgisayar
+televizyon
+sınıf
+otobüs
+mutfak
+bisiklet
+banyo
+kağıt
+sandalye
+masa
+yemek
+kedi
+menü
+yatak odası
+tahta
+motor
+para
+telefon
+piyano
+yol
+bahçe
+şemsiye
