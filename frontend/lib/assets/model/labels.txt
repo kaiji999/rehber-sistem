@@ -1,0 +1,16 @@
+0 otomat
+1 kalem
+2 kapı
+3 kitap
+4 asansör
+5 merdiven
+6 muz
+7 elma
+8 portakal
+9 soğan
+10 patates
+11 marul
+12 çikolata
+13 cips
+14 bisküvi
+15 kantin

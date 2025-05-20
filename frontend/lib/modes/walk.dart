@@ -18,7 +18,7 @@ class _WalkPageState extends State<WalkPage> {
   late FlutterTts _flutterTts;
   bool isDetecting = false;
   bool isSpeaking = false;
-  String result = "No Object Detected";
+  String result = "Hiçbir nesne algılanmadı";
 
   @override
   void initState() {
@@ -81,21 +81,21 @@ class _WalkPageState extends State<WalkPage> {
                         "${label.label} - ${(label.confidence * 100).toStringAsFixed(2)}%",
                   )
                   .join("\n")
-              : "No Object Detected";
+              : "Hiçbir nesne algılanmadı";
 
       setState(() {
         result = detectedObjects;
       });
 
       // Speak the detected objects
-      if (detectedObjects != "No Object Detected") {
+      if (detectedObjects != "Hiçbir nesne algılanmadı") {
         isSpeaking = true;
         await _flutterTts.speak(labels.map((label) => label.label).join(", "));
       }
     } catch (error) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text("Error Processing Image"),
+          content: Text("Görüntü işleme hatası"),
           backgroundColor: Colors.red,
         ),
       );
@@ -113,7 +113,7 @@ class _WalkPageState extends State<WalkPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Walk Mode - Object Detection')),
+      appBar: AppBar(title: const Text('Yürüme Modu')),
       body:
           _cameraController.value.isInitialized
               ? Stack(
