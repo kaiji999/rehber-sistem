@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 
 class TalkPage extends StatefulWidget {
   const TalkPage({Key? key}) : super(key: key);
@@ -14,7 +15,9 @@ class TalkPage extends StatefulWidget {
 class _TalkPageState extends State<TalkPage> {
   late CameraController _cameraController;
   late FaceDetector _faceDetector;
+  late FlutterTts _flutterTts;
   bool isDetecting = false;
+  bool isSpeaking = false;
   String detectedExpression = "Yüz tespit edilemedi";
 
   @override
@@ -22,6 +25,12 @@ class _TalkPageState extends State<TalkPage> {
     super.initState();
     _initializeCamera();
     _initializeFaceDetector();
+    _flutterTts = FlutterTts();
+    _flutterTts.setCompletionHandler(() {
+      setState(() {
+        isSpeaking = false;
+      });
+    });
   }
 
   Future<void> _initializeCamera() async {
@@ -46,7 +55,7 @@ class _TalkPageState extends State<TalkPage> {
 
   void _startImageStream() {
     _cameraController.startImageStream((CameraImage image) async {
-      if (isDetecting) return;
+      if (isDetecting || isSpeaking) return;
 
       isDetecting = true;
       await _processImage(image);
@@ -67,13 +76,20 @@ class _TalkPageState extends State<TalkPage> {
       final inputImage = InputImage.fromFile(imageFile);
       final List<Face> faces = await _faceDetector.processImage(inputImage);
 
-      String expression = faces.isNotEmpty
-          ? _analyzeFacialExpressions(faces.first)
-          : "Yüz tespit edilemedi";
+      String expression =
+          faces.isNotEmpty
+              ? _analyzeFacialExpressions(faces.first)
+              : "Yüz tespit edilemedi";
 
       setState(() {
         detectedExpression = expression;
       });
+
+      // Speak the detected expression
+      if (expression != "Yüz tespit edilemedi") {
+        isSpeaking = true;
+        await _flutterTts.speak(expression);
+      }
     } catch (error) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -87,7 +103,8 @@ class _TalkPageState extends State<TalkPage> {
   String _analyzeFacialExpressions(Face face) {
     if (face.smilingProbability != null && face.smilingProbability! > 0.7) {
       return "Mutlu";
-    } else if (face.smilingProbability != null && face.smilingProbability! < 0.3) {
+    } else if (face.smilingProbability != null &&
+        face.smilingProbability! < 0.3) {
       if (face.leftEyeOpenProbability != null &&
           face.leftEyeOpenProbability! < 0.3 &&
           face.rightEyeOpenProbability != null &&
@@ -110,6 +127,7 @@ class _TalkPageState extends State<TalkPage> {
   void dispose() {
     _cameraController.dispose();
     _faceDetector.close();
+    _flutterTts.stop();
     super.dispose();
   }
 
@@ -120,26 +138,27 @@ class _TalkPageState extends State<TalkPage> {
         onDoubleTap: () {
           Navigator.pop(context); // Navigate back to the homepage
         },
-        child: _cameraController.value.isInitialized
-            ? Stack(
-                children: [
-                  CameraPreview(_cameraController),
-                  Positioned(
-                    bottom: 20,
-                    left: 20,
-                    child: Text(
-                      detectedExpression,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        backgroundColor: Colors.black54,
+        child:
+            _cameraController.value.isInitialized
+                ? Stack(
+                  children: [
+                    CameraPreview(_cameraController),
+                    Positioned(
+                      bottom: 20,
+                      left: 20,
+                      child: Text(
+                        detectedExpression,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          backgroundColor: Colors.black54,
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              )
-            : const Center(child: CircularProgressIndicator()),
+                  ],
+                )
+                : const Center(child: CircularProgressIndicator()),
       ),
-    );      
+    );
   }
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 
 class ReadPage extends StatefulWidget {
   const ReadPage({Key? key}) : super(key: key);
@@ -14,14 +15,18 @@ class ReadPage extends StatefulWidget {
 class _ReadPageState extends State<ReadPage> {
   late CameraController _cameraController;
   late TextRecognizer _textRecognizer;
-  bool isDetecting = false;
-  String extractedText = "No Text Detected";
+  late FlutterTts _flutterTts;
+  bool isProcessing = false;
+  String extractedText = "Ekrana dokunun, metin algılansın.";
 
   @override
   void initState() {
     super.initState();
     _initializeCamera();
     _initializeTextRecognizer();
+    _flutterTts = FlutterTts();
+    _flutterTts.setLanguage("tr-TR");
+    _flutterTts.speak("Ekrana dokunun, metin algılansın.");
   }
 
   Future<void> _initializeCamera() async {
@@ -31,24 +36,19 @@ class _ReadPageState extends State<ReadPage> {
     _cameraController = CameraController(camera, ResolutionPreset.max);
 
     await _cameraController.initialize();
-    _startImageStream();
+    setState(() {});
   }
 
   void _initializeTextRecognizer() {
     _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
   }
 
-  void _startImageStream() {
-    _cameraController.startImageStream((CameraImage image) async {
-      if (isDetecting) return;
-
-      isDetecting = true;
-      await _processImage(image);
-      isDetecting = false;
+  Future<void> _captureAndProcessImage() async {
+    if (isProcessing) return;
+    setState(() {
+      isProcessing = true;
+      extractedText = "Metin algılanıyor...";
     });
-  }
-
-  Future<void> _processImage(CameraImage cameraImage) async {
     try {
       final Directory tempDir = await getTemporaryDirectory();
       final String filePath =
@@ -59,23 +59,38 @@ class _ReadPageState extends State<ReadPage> {
       await picture.saveTo(imageFile.path);
 
       final inputImage = InputImage.fromFile(imageFile);
-      final RecognizedText recognizedText =
-          await _textRecognizer.processImage(inputImage);
+      final RecognizedText recognizedText = await _textRecognizer.processImage(
+        inputImage,
+      );
 
-      String detectedText = recognizedText.text.isNotEmpty
-          ? recognizedText.text
-          : "No Text Detected";
+      String detectedText =
+          recognizedText.text.isNotEmpty
+              ? recognizedText.text
+              : "Metin algılanamadı.";
 
       setState(() {
         extractedText = detectedText;
       });
+
+      // Speak the detected text
+      if (detectedText != "Metin algılanamadı.") {
+        await _flutterTts.setLanguage("tr-TR");
+        await _flutterTts.speak(detectedText);
+      }
     } catch (error) {
+      setState(() {
+        extractedText = "Bir hata oluştu.";
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text("Error Processing Image"),
+          content: Text("Görüntü işleme hatası"),
           backgroundColor: Colors.red,
         ),
       );
+    } finally {
+      setState(() {
+        isProcessing = false;
+      });
     }
   }
 
@@ -83,6 +98,7 @@ class _ReadPageState extends State<ReadPage> {
   void dispose() {
     _cameraController.dispose();
     _textRecognizer.close();
+    _flutterTts.stop();
     super.dispose();
   }
 
@@ -90,28 +106,33 @@ class _ReadPageState extends State<ReadPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: GestureDetector(
+        onTap: _captureAndProcessImage,
         onDoubleTap: () {
           Navigator.pop(context); // Navigate back to the homepage
         },
-        child: _cameraController.value.isInitialized
-            ? Stack(
-                children: [
-                  CameraPreview(_cameraController),
-                  Positioned(
-                    bottom: 20,
-                    left: 20,
-                    child: Text(
-                      extractedText,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        backgroundColor: Colors.black54,
+        child:
+            _cameraController.value.isInitialized
+                ? Stack(
+                  children: [
+                    CameraPreview(_cameraController),
+                    Positioned(
+                      bottom: 20,
+                      left: 20,
+                      right: 20,
+                      child: SingleChildScrollView(
+                        child: Text(
+                          extractedText,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            backgroundColor: Colors.black54,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ],
-              )
-            : const Center(child: CircularProgressIndicator()),
+                  ],
+                )
+                : const Center(child: CircularProgressIndicator()),
       ),
     );
   }

@@ -16,9 +16,7 @@ class Homepage extends StatelessWidget {
 
     // Hoş geldiniz mesajı ve modlara geçiş bilgisi
     Future<void> _welcomeMessage() async {
-      await _speak(
-        "Hoş geldiniz. Konuşma moduna geçmek için yukarı kaydırın. Okuma moduna geçmek için aşağı kaydırın. Yürüme moduna geçmek için sağa kaydırın. Lokasyon moduna geçmek için sola kaydırın.",
-      );
+      await _speak("Hoş geldiniz.");
     }
 
     // Uygulama açıldığında hoş geldiniz mesajını oynat

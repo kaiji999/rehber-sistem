@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 
 class WalkPage extends StatefulWidget {
   const WalkPage({Key? key}) : super(key: key);
@@ -14,7 +15,9 @@ class WalkPage extends StatefulWidget {
 class _WalkPageState extends State<WalkPage> {
   late CameraController _cameraController;
   late ImageLabeler _imageLabeler;
+  late FlutterTts _flutterTts;
   bool isDetecting = false;
+  bool isSpeaking = false;
   String result = "No Object Detected";
 
   @override
@@ -22,13 +25,19 @@ class _WalkPageState extends State<WalkPage> {
     super.initState();
     _initializeCamera();
     _initializeImageLabeler();
+    _flutterTts = FlutterTts();
+    _flutterTts.setCompletionHandler(() {
+      setState(() {
+        isSpeaking = false;
+      });
+    });
   }
 
   Future<void> _initializeCamera() async {
     final cameras = await availableCameras();
     final camera = cameras.first;
 
-    _cameraController = CameraController(camera, ResolutionPreset.max);
+    _cameraController = CameraController(camera, ResolutionPreset.medium);
 
     await _cameraController.initialize();
     _startImageStream();
@@ -41,7 +50,7 @@ class _WalkPageState extends State<WalkPage> {
 
   void _startImageStream() {
     _cameraController.startImageStream((CameraImage image) async {
-      if (isDetecting) return;
+      if (isDetecting || isSpeaking) return;
 
       isDetecting = true;
       await _processImage(image);
@@ -64,18 +73,25 @@ class _WalkPageState extends State<WalkPage> {
         inputImage,
       );
 
-      String detectedObjects = labels.isNotEmpty
-          ? labels
-              .map(
-                (label) =>
-                    "${label.label} - ${(label.confidence * 100).toStringAsFixed(2)}%",
-              )
-              .join("\n")
-          : "No Object Detected";
+      String detectedObjects =
+          labels.isNotEmpty
+              ? labels
+                  .map(
+                    (label) =>
+                        "${label.label} - ${(label.confidence * 100).toStringAsFixed(2)}%",
+                  )
+                  .join("\n")
+              : "No Object Detected";
 
       setState(() {
         result = detectedObjects;
       });
+
+      // Speak the detected objects
+      if (detectedObjects != "No Object Detected") {
+        isSpeaking = true;
+        await _flutterTts.speak(labels.map((label) => label.label).join(", "));
+      }
     } catch (error) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -90,18 +106,17 @@ class _WalkPageState extends State<WalkPage> {
   void dispose() {
     _cameraController.dispose();
     _imageLabeler.close();
+    _flutterTts.stop();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: GestureDetector(
-        onDoubleTap: () {
-          Navigator.pop(context); // Navigate back to the homepage
-        },
-        child: _cameraController.value.isInitialized
-            ? Stack(
+      appBar: AppBar(title: const Text('Walk Mode - Object Detection')),
+      body:
+          _cameraController.value.isInitialized
+              ? Stack(
                 children: [
                   CameraPreview(_cameraController),
                   Positioned(
@@ -118,8 +133,7 @@ class _WalkPageState extends State<WalkPage> {
                   ),
                 ],
               )
-            : const Center(child: CircularProgressIndicator()),
-      ),
+              : const Center(child: CircularProgressIndicator()),
     );
   }
 }
