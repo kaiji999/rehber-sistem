@@ -37,3 +37,4 @@ flutter:
     - lib/assets/logo.png
     - lib/assets/model/labels.txt
     - lib/assets/model/model_unquant.tflite
+    - lib/assets/labels_tr.txt

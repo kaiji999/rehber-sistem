@@ -19,10 +19,12 @@ class _WalkPageState extends State<WalkPage> {
   bool isDetecting = false;
   bool isSpeaking = false;
   String result = "Hiçbir nesne algılanmadı";
+  Map<String, String> labelTranslations = {};
 
   @override
   void initState() {
     super.initState();
+    _loadLabelTranslations();
     _initializeCamera();
     _initializeImageLabeler();
     _flutterTts = FlutterTts();
@@ -30,6 +32,24 @@ class _WalkPageState extends State<WalkPage> {
       setState(() {
         isSpeaking = false;
       });
+    });
+  }
+
+  Future<void> _loadLabelTranslations() async {
+    final labelsFile = await DefaultAssetBundle.of(
+      context,
+    ).loadString('lib/assets/labels_tr.txt');
+    final lines = labelsFile.split('\n');
+    final Map<String, String> translations = {};
+    for (var line in lines) {
+      if (line.trim().isEmpty || !line.contains('=')) continue;
+      final parts = line.split('=');
+      if (parts.length == 2) {
+        translations[parts[0].trim().toLowerCase()] = parts[1].trim();
+      }
+    }
+    setState(() {
+      labelTranslations = translations;
     });
   }
 
@@ -72,16 +92,25 @@ class _WalkPageState extends State<WalkPage> {
       final List<ImageLabel> labels = await _imageLabeler.processImage(
         inputImage,
       );
+      double threshold = 0.1;
 
+      final filteredLabels =
+          labels.where((label) => label.confidence >= threshold).toList();
       String detectedObjects =
-          labels.isNotEmpty
-              ? labels
-                  .map(
-                    (label) =>
-                        "${label.label} - ${(label.confidence * 100).toStringAsFixed(2)}%",
+          filteredLabels.isNotEmpty
+              ? filteredLabels
+                  .where(
+                    (label) => labelTranslations.containsKey(
+                      label.label.toLowerCase(),
+                    ),
                   )
+                  .map((label) {
+                    final key = label.label.toLowerCase();
+                    final tr = labelTranslations[key];
+                    return "${tr!} - ${(label.confidence * 100).toStringAsFixed(2)}%";
+                  })
                   .join("\n")
-              : "Hiçbir nesne algılanmadı";
+              : "Hiçbir nesne tespit edilmedi";
 
       setState(() {
         result = detectedObjects;
@@ -90,7 +119,7 @@ class _WalkPageState extends State<WalkPage> {
       // Speak the detected objects
       if (detectedObjects != "Hiçbir nesne algılanmadı") {
         isSpeaking = true;
-        await _flutterTts.speak(labels.map((label) => label.label).join(", "));
+        await _flutterTts.speak(result);
       }
     } catch (error) {
       ScaffoldMessenger.of(context).showSnackBar(
