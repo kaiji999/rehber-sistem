@@ -5,7 +5,6 @@ import 'package:google_mlkit_image_labeling/google_mlkit_image_labeling.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:flutter/services.dart';
-import 'package:path/path.dart';
 
 class WalkPage extends StatefulWidget {
   const WalkPage({Key? key}) : super(key: key);
@@ -17,41 +16,25 @@ class WalkPage extends StatefulWidget {
 class _WalkPageState extends State<WalkPage> {
   late CameraController _cameraController;
   late ImageLabeler _baseLabeler;
-  late ImageLabeler _customLabeler;
   late FlutterTts _flutterTts;
   bool isDetecting = false;
   bool isSpeaking = false;
   String result = "Hiçbir nesne algılanmadı";
-  List<String> customLabels = [];
   Map<String, String> labelTranslations = {};
 
-  final String _modelPath = 'lib/assets/model/son_model.tflite';
-  final String _labelsPath = 'lib/assets/model/labels.txt';
   final String _labelsTrPath = 'lib/assets/labels_tr.txt';
 
   @override
   void initState() {
     super.initState();
-    _loadCustomLabels();
     _loadLabelTranslations();
     _initializeCamera();
-    _initializeLabelers();
+    _initializeLabeler();
     _flutterTts = FlutterTts();
     _flutterTts.setCompletionHandler(() {
       setState(() {
         isSpeaking = false;
       });
-    });
-  }
-
-  Future<void> _loadCustomLabels() async {
-    final labelsFile = await rootBundle.loadString(_labelsPath);
-    setState(() {
-      customLabels =
-          labelsFile
-              .split('\n')
-              .where((line) => line.trim().isNotEmpty)
-              .toList();
     });
   }
 
@@ -78,29 +61,10 @@ class _WalkPageState extends State<WalkPage> {
     _startImageStream();
   }
 
-  Future<void> _initializeLabelers() async {
+  Future<void> _initializeLabeler() async {
     _baseLabeler = ImageLabeler(
       options: ImageLabelerOptions(confidenceThreshold: 0.5),
     );
-    final modelPath = await _getAssetPath(_modelPath);
-    _customLabeler = ImageLabeler(
-      options: LocalLabelerOptions(
-        modelPath: modelPath,
-        confidenceThreshold: 0.5,
-      ),
-    );
-  }
-
-  Future<String> _getAssetPath(String asset) async {
-    final directory = await getApplicationSupportDirectory();
-    final path = '${directory.path}/${basename(asset)}';
-    final file = File(path);
-    if (!await file.exists()) {
-      final byteData = await rootBundle.load(asset);
-      await file.create(recursive: true);
-      await file.writeAsBytes(byteData.buffer.asUint8List());
-    }
-    return file.path;
   }
 
   void _startImageStream() {
@@ -129,42 +93,22 @@ class _WalkPageState extends State<WalkPage> {
         inputImage,
       );
 
-      // Custom model: image labeler
-      final List<ImageLabel> customLabelsResult = await _customLabeler
-          .processImage(inputImage);
-
-      // Format results
+      // Format results: only show translated labels
       String detectedObjects = "";
-
-      // Base model results (with Turkish translation)
       if (baseLabels.isNotEmpty) {
-        detectedObjects +=
-            "Varsayılan Model:\n" +
-            baseLabels
-                .map((label) {
-                  final key = label.label.toLowerCase();
-                  final tr = labelTranslations[key];
-                  return "${tr ?? label.label} - ${(label.confidence * 100).toStringAsFixed(2)}%";
-                })
-                .join("\n") +
-            "\n";
-      }
-
-      // Custom model results (no translation)
-      if (customLabelsResult.isNotEmpty) {
-        detectedObjects +=
-            "Özel Model:\n" +
-            customLabelsResult
-                .map((label) {
-                  final idx = label.index;
-                  final customLabel =
-                      (idx < customLabels.length)
-                          ? customLabels[idx]
-                          : label.label;
-                  return "$customLabel - ${(label.confidence * 100).toStringAsFixed(2)}%";
-                })
-                .join("\n") +
-            "\n";
+        final translated = baseLabels
+            .map((label) {
+              final key = label.label.toLowerCase();
+              final tr = labelTranslations[key];
+              return tr != null
+                  ? "$tr - ${(label.confidence * 100).toStringAsFixed(2)}%"
+                  : null;
+            })
+            .where((e) => e != null)
+            .join("\n");
+        if (translated.isNotEmpty) {
+          detectedObjects = translated;
+        }
       }
 
       if (detectedObjects.trim().isEmpty) {
@@ -175,39 +119,27 @@ class _WalkPageState extends State<WalkPage> {
         result = detectedObjects;
       });
 
-      // Speak the detected objects (Turkish for base model)
+      // Speak the detected objects (Turkish only)
       if (detectedObjects != "Hiçbir nesne tespit edilmedi" &&
           detectedObjects != "Hiçbir nesne algılanmadı") {
         isSpeaking = true;
-        String speakText = "";
-        if (baseLabels.isNotEmpty) {
-          speakText +=
-              baseLabels
-                  .map((label) {
-                    final key = label.label.toLowerCase();
-                    return labelTranslations[key] ?? label.label;
-                  })
-                  .join(", ") +
-              ". ";
+        final speakText =
+            baseLabels
+                .map((label) {
+                  final key = label.label.toLowerCase();
+                  return labelTranslations[key];
+                })
+                .where((e) => e != null)
+                .join(", ") +
+            ".";
+        if (speakText.trim().isNotEmpty) {
+          await _flutterTts.speak(speakText);
         }
-        if (customLabelsResult.isNotEmpty) {
-          speakText +=
-              customLabelsResult
-                  .map((label) {
-                    final idx = label.index;
-                    return (idx < customLabels.length)
-                        ? customLabels[idx]
-                        : label.label;
-                  })
-                  .join(", ") +
-              ". ";
-        }
-        await _flutterTts.speak(speakText);
       }
     } catch (error) {
       print(error); // Print the error for debugging
       if (!mounted) return;
-      ScaffoldMessenger.of(context as BuildContext).showSnackBar(
+      ScaffoldMessenger.of(this.context).showSnackBar(
         SnackBar(
           content: Text("Görüntü işleme hatası"),
           backgroundColor: Colors.red,
@@ -220,7 +152,6 @@ class _WalkPageState extends State<WalkPage> {
   void dispose() {
     _cameraController.dispose();
     _baseLabeler.close();
-    _customLabeler.close();
     _flutterTts.stop();
     super.dispose();
   }
@@ -231,22 +162,27 @@ class _WalkPageState extends State<WalkPage> {
       appBar: AppBar(title: const Text('Yürüme Modu')),
       body:
           _cameraController.value.isInitialized
-              ? Stack(
-                children: [
-                  CameraPreview(_cameraController),
-                  Positioned(
-                    bottom: 20,
-                    left: 20,
-                    child: Text(
-                      result,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        backgroundColor: Colors.black54,
+              ? GestureDetector(
+                onDoubleTap: () {
+                  Navigator.of(context).pop(); // Anasayfaya döner
+                },
+                child: Stack(
+                  children: [
+                    CameraPreview(_cameraController),
+                    Positioned(
+                      bottom: 20,
+                      left: 20,
+                      child: Text(
+                        result,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          backgroundColor: Colors.black54,
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               )
               : const Center(child: CircularProgressIndicator()),
     );
